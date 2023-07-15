@@ -33,7 +33,7 @@ pub struct Chunk {
 }
 
 impl Chunk {
-    fn new(chunk_type: ChunkType, data: Vec<u8>) -> Chunk {
+    pub fn new(chunk_type: ChunkType, data: Vec<u8>) -> Chunk {
         let length = data.len();
         let bytes = chunk_type.bytes().iter().chain(data.iter()).copied().collect::<Vec<u8>>();
         return Chunk {
