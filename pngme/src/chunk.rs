@@ -44,24 +44,33 @@ impl Chunk {
         };
     }
 
-    fn length(&self) -> u32 {
+    pub fn length(&self) -> u32 {
         return self.length;
     }
 
-    fn chunk_type(&self) -> &ChunkType {
+    pub fn chunk_type(&self) -> &ChunkType {
         return &self.chunk_type;
     }
 
-    fn data(&self) -> &[u8] {
+    pub fn data(&self) -> &[u8] {
         return &self.chunk_data;
     }
 
-    fn crc(&self) -> u32 {
+    pub fn crc(&self) -> u32 {
         return self.crc;
     }
 
-    fn data_as_string(&self) -> Result<String, std::string::FromUtf8Error> {
+    pub fn data_as_string(&self) -> Result<String, std::string::FromUtf8Error> {
         return String::from_utf8(self.chunk_data.clone());
+    }
+
+    pub fn as_bytes(&self) -> Vec<u8> {
+        self.length.to_be_bytes().iter()
+            .chain(&self.chunk_type.bytes())
+            .chain(self.data())
+            .chain(self.crc.to_be_bytes().iter())
+            .copied()
+            .collect::<Vec<u8>>()
     }
 }
 
@@ -85,7 +94,7 @@ impl TryFrom<&[u8]> for Chunk {
 
         let chunk_data = Vec::from(&bytes[8..bytes.len() -4]);
 
-        let chunk = Chunk::new(chunk_type, chunk_data);
+        let chunk = Self::new(chunk_type, chunk_data);
 
         let crc = u32::from_be_bytes(bytes[bytes.len() - 4..].try_into().unwrap());
 
