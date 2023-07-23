@@ -25,7 +25,7 @@
 
 ## About The Project
 
-This is the last project I will build to end off my rust journey. It involves creating a CLI utility that will encode and decode messages from a PNG file. The original tutorial provides unit tests and some example stubbings for the production codes methods but none of the actual business logic for the production code is provided.
+This is the last project I will build to end off my rust journey. It involves creating a CLI utility that will encode and decode messages from a PNG file. The original tutorial provides unit tests and some example stubbings for the production codes methods but none of the actual business logic for the production code is provided. I was able to implement the majority of the code up to chapter 3 without having to copy from other solutions. From chapter 3 onwards, there is less stubbings/tests and for some reason, a couple of tests would fail due to some logical errors in the original code i used. Because of this, I mainly referred to the implementation by [lijing-2008](https://github.com/lijing-2008/pngme). I still highly recommend tackling this project and seeing how far you get.
 
 ## Built With
 
