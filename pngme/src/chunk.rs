@@ -1,72 +1,53 @@
-use std::convert::TryFrom;
-use std::fmt;
+use std::fmt::{Display, Formatter};
 
-use crate::chunk_type::{ChunkType, ChunkTypeError};
+use anyhow::Result;
 use crc::{Crc, CRC_32_ISO_HDLC};
 
-const CRC_32_ISO: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
+use crate::chunk_type::ChunkType;
+use crate::png_error::PngError;
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum ChunkError {
-    #[error("chunk did not contain all the required data")]
-    Incomplete,
+pub const CRC_32_ISO: Crc<u32> = Crc::<u32>::new(&CRC_32_ISO_HDLC);
 
-    #[error("invalid length field (expected {0:?}, found {1:?})")]
-    InvalidLengthField(u32, u32),
-
-    #[error(transparent)]
-    InvalidChunkType(#[from] ChunkTypeError),
-
-    #[error("parsed checksum didn't match calculated checksum")]
-    InvalidChecksum,
-
-    #[error("io exception")]
-    IOException
-}
-
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Chunk {
-    length: u32,
+    data_length: u32,
     chunk_type: ChunkType,
-    chunk_data: Vec<u8>,
-    crc: u32
+    data: Vec<u8>,
+    crc: u32,
 }
 
 impl Chunk {
     pub fn new(chunk_type: ChunkType, data: Vec<u8>) -> Chunk {
-        let length = data.len();
-        let bytes = chunk_type.bytes().iter().chain(data.iter()).copied().collect::<Vec<u8>>();
-        return Chunk {
-            length: length.try_into().unwrap(),
-            chunk_type: chunk_type,
-            chunk_data: data,
-            crc: CRC_32_ISO.checksum(&bytes[..])
-        };
+        let crc_source = chunk_type.to_string().as_bytes().iter()
+            .chain(data.iter())
+            .copied()
+            .collect::<Vec<u8>>();
+        Chunk {
+            data_length: data.len() as u32,
+            chunk_type,
+            data,
+            crc: CRC_32_ISO.checksum(&crc_source[..]),
+        }
     }
-
     pub fn length(&self) -> u32 {
-        return self.length;
+        self.data_length
     }
-
     pub fn chunk_type(&self) -> &ChunkType {
-        return &self.chunk_type;
+        &self.chunk_type
     }
-
     pub fn data(&self) -> &[u8] {
-        return &self.chunk_data;
+        &self.data[..]
     }
-
     pub fn crc(&self) -> u32 {
-        return self.crc;
+        self.crc
     }
-
-    pub fn data_as_string(&self) -> Result<String, std::string::FromUtf8Error> {
-        return String::from_utf8(self.chunk_data.clone());
+    pub fn data_as_string(&self) -> Result<String> {
+        let res = String::from_utf8(self.data.clone())?;
+        Ok(res)
     }
-
     pub fn as_bytes(&self) -> Vec<u8> {
-        self.length.to_be_bytes().iter()
-            .chain(&self.chunk_type.bytes())
+        self.data_length.to_be_bytes().iter()
+            .chain(self.chunk_type.to_string().as_bytes())
             .chain(self.data())
             .chain(self.crc.to_be_bytes().iter())
             .copied()
@@ -75,47 +56,45 @@ impl Chunk {
 }
 
 impl TryFrom<&[u8]> for Chunk {
-    type Error = ChunkError;
+    type Error = PngError;
 
-    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
-        if bytes.len() < 12 {
-            return Err(ChunkError::Incomplete);
-        }
+    fn try_from(value: &[u8]) -> Result<Self, PngError> {
+        let len = &value[0..4];
+        let crc = &value[value.len() - 4..];
+        return match value.len() / 12 {
+            0 => Err(PngError::ChunkError),
+            _ => {
+                // check CRC
+                if read_be_u32(crc) != CRC_32_ISO.checksum(&value[4..value.len() - 4]) {
+                    return Err(PngError::CRCError);
+                }
+                Ok(Chunk {
+                    data_length: read_be_u32(len),
+                    chunk_type: ChunkType::try_from(<[u8; 4]>::try_from(&value[4..8]).unwrap()).unwrap(),
+                    data: value[8..value.len() - 4].to_vec(),
+                    crc: read_be_u32(crc),
 
-        let length = u32::from_be_bytes(bytes[..4].try_into().unwrap());
-
-        let expected_length = bytes.len() as u32 - 12;
-        if length != expected_length {
-            return Err(ChunkError::InvalidLengthField(expected_length, length));
-        }
-
-        let chunk_type_bytes: [u8; 4] = bytes[4..8].try_into().unwrap();
-        let chunk_type = ChunkType::try_from(chunk_type_bytes)?;
-
-        let chunk_data = Vec::from(&bytes[8..bytes.len() -4]);
-
-        let chunk = Self::new(chunk_type, chunk_data);
-
-        let crc = u32::from_be_bytes(bytes[bytes.len() - 4..].try_into().unwrap());
-
-        if crc != chunk.crc() {
-            return Err(ChunkError::InvalidChecksum);
-        }
-
-        return Ok(chunk);
+                })
+            }
+        };
     }
 }
 
-impl fmt::Display for Chunk {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "Chunk {{",)?;
-        writeln!(f, "  Length: {}", self.length())?;
-        writeln!(f, "  Type: {}", self.chunk_type())?;
-        writeln!(f, "  Data: {} bytes", self.data().len())?;
-        writeln!(f, "  Crc: {}", self.crc())?;
-        writeln!(f, "}}",)?;
-        Ok(())
+impl Display for Chunk {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let chunk_type_string = self.chunk_type.to_string();
+        let chunk_data_string = String::from_utf8_lossy(self.data()).to_string();
+        write!(f, "data_length:{},chunk_type:{},chunk_data:{}, crc:{}",
+               self.data_length,
+               chunk_type_string,
+               chunk_data_string,
+               self.crc)
     }
+}
+
+fn read_be_u32(input: &[u8]) -> u32 {
+    let (int_bytes, _) = input.split_at(std::mem::size_of::<u32>());
+    u32::from_be_bytes(int_bytes.try_into().unwrap())
 }
 
 #[cfg(test)]

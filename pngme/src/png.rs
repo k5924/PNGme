@@ -1,156 +1,124 @@
-use std::convert::TryFrom;
-use std::fmt;
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
 use std::fs;
-use std::io::{BufReader, Read, Error};
 use std::path::Path;
 use std::str::FromStr;
 
-use crate::chunk::{Chunk, ChunkError};
-use crate::chunk_type::{ChunkType, ChunkTypeError};
+use anyhow::Result;
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum PngError {
+use crate::chunk::Chunk;
+use crate::chunk_type::ChunkType;
+use crate::png_error::PngError;
+use crate::utils::read_be_u32;
 
-    #[error("chunk type error")]
-    ChunkTypeError(ChunkTypeError),
-
-    #[error("chunk error")]
-    ChunkError(ChunkError),
-
-    #[error("invalid signature")]
-    InvalidSignature,
-
-    #[error("chunk type not found")]
-    ChunkTypeNotFound,
-
-    #[error("io exception")]
-    IOError
-}
-
-impl From<ChunkTypeError> for PngError {
-    fn from(err: ChunkTypeError) -> Self {
-        PngError::ChunkTypeError(err)
-    }
-}
-
-impl From<ChunkError> for PngError {
-    fn from(err: ChunkError) -> Self {
-        PngError::ChunkError(err)
-    }
-}
-
-/// A PNG container as described by the PNG spec
-/// http://www.libpng.org/pub/png/spec/1.2/PNG-Contents.html
 #[derive(Debug)]
 pub struct Png {
-    // Write me!
     signature: [u8; 8],
-    chunks: Vec<Chunk>
+    pub(crate) chunks: Vec<Chunk>,
 }
 
 impl Png {
-    // Fill in this array with the correct values per the PNG spec
-    pub const STANDARD_HEADER: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
+    const STANDARD_HEADER: [u8; 8] = [137, 80, 78, 71, 13, 10, 26, 10];
 
-    /// Creates a `Png` from a list of chunks using the correct header
-    pub fn from_chunks(chunks: Vec<Chunk>) -> Self {
-        Self {
-            signature: Self::STANDARD_HEADER,
-            chunks: chunks
+    pub fn from_chunks(chunks: Vec<Chunk>) -> Png {
+        Png {
+            signature: Png::STANDARD_HEADER,
+            chunks,
         }
     }
-
-    /// Creates a `Png` from a file path
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self, PngError> {
-        match fs::read(path) {
-            Ok(file) => return Self::try_from(&file[..]),
-            Err(_) => return Err(PngError::IOError)
-        }
+        let f = fs::read(path)?;
+        let png = Png::try_from(&f[..])?;
+        Ok(png)
     }
 
-    /// Appends a chunk to the end of this `Png` file's `Chunk` list.
     pub fn append_chunk(&mut self, chunk: Chunk) {
         self.chunks.push(chunk);
     }
-
-    /// Searches for a `Chunk` with the specified `chunk_type` and removes the first
-    /// matching `Chunk` from this `Png` list of chunks.
     pub fn remove_chunk(&mut self, chunk_type: &str) -> Result<Chunk, PngError> {
-        let is_in_file = self.chunk_by_type(chunk_type);
-        if is_in_file.is_some() {
-            for (index, chunk) in self.chunks.iter().cloned().enumerate() {
-                if chunk.chunk_type().to_string() == chunk_type {
-                    self.chunks.remove(index);
-                    return Ok(chunk.clone());
-                }
+        let remove_type = ChunkType::from_str(chunk_type)?;
+
+        let mut flag = false;
+        let mut remove_index = 0;
+        for i in 0..self.chunks.len() {
+            if *self.chunks[i].chunk_type() == remove_type {
+                flag = true;
+                remove_index = i;
             }
         }
-        return Err(PngError::ChunkTypeNotFound);
+        return match flag {
+            true => Ok(self.chunks.remove(remove_index)),
+            false => Err(PngError::NotFoundChunkType),
+        };
     }
-
-    /// The header of this PNG.
     pub fn header(&self) -> &[u8; 8] {
         &self.signature
     }
-
-    /// Lists the `Chunk`s stored in this `Png`
     pub fn chunks(&self) -> &[Chunk] {
         &self.chunks
     }
-
-    /// Searches for a `Chunk` with the specified `chunk_type` and returns the first
-    /// matching `Chunk` from this `Png`.
     pub fn chunk_by_type(&self, chunk_type: &str) -> Option<&Chunk> {
-        for chunk in self.chunks.iter() {
-            if chunk.chunk_type().to_string() == chunk_type {
-                return Some(chunk);
+        for val in self.chunks.iter() {
+            match val.chunk_type().to_string() == chunk_type.to_string() {
+                true => return Some(val),
+                false => continue
             }
         }
-        return None;
+        None
     }
-
-    /// Returns this `Png` as a byte sequence.
-    /// These bytes will contain the header followed by the bytes of all of the chunks.
+    pub fn data_string_by_type(&self, chunk_type: &str) -> Option<String> {
+        let chunk_data = self.chunk_by_type(chunk_type);
+        return if let Some(data) = chunk_data {
+            let a = data.data_as_string().unwrap();
+            Some(a)
+        } else { None };
+    }
     pub fn as_bytes(&self) -> Vec<u8> {
-        let mut png_bytes: Vec<u8> = Vec::new();
-        png_bytes.append(&mut self.signature.to_vec());
-        for chunk in &self.chunks {
-            png_bytes.append(&mut chunk.as_bytes())
+        // self.signature.to_vec().iter()
+        //     .chain(self.chunks.iter())
+        let mut res = Vec::new();
+        let mut header = self.signature.to_vec();
+        res.append(&mut header);
+        for val in self.chunks.iter() {
+            let mut vec2 = val.as_bytes();
+            res.append(&mut vec2)
         }
-        png_bytes
+        res
     }
 }
 
 impl TryFrom<&[u8]> for Png {
     type Error = PngError;
 
-    fn try_from(bytes: &[u8]) -> Result<Png, Self::Error> {
-        let signature: [u8; 8] = bytes[..8].try_into().unwrap();
-        
-        match signature.to_vec() == Png::STANDARD_HEADER {
-            true =>  {}
-            false => return Err(PngError::InvalidSignature)
+    fn try_from(value: &[u8]) -> std::result::Result<Self, Self::Error> {
+        let (header, chunks_bytes) = value.split_at(8);
+        // check the header
+        match header.to_vec() == Png::STANDARD_HEADER {
+            true => {}
+            false => return Err(PngError::ChunkHeaderError)
         }
-
-        let mut chunks = Vec::new();
-        let mut chunk_length: usize = 0;
-        while chunk_length < bytes.len() {
-            let mut start_pos = 8;
-            let end_of_length = 12;
-            let chunk_data_length: u32 = u32::from_be_bytes(bytes[start_pos..end_of_length].try_into().unwrap());
-            chunk_length = chunk_data_length as usize + 12;
-            chunks.push(Chunk::try_from(&bytes[start_pos..chunk_length])?);
-            start_pos = chunk_length;
+        // check each chunk
+        let mut chunk_vec: Vec<Chunk> = Vec::new();
+        let mut chunks = chunks_bytes;
+        loop {
+            let left_len = read_be_u32(chunks) as usize;
+            let (left, right) = chunks.split_at(left_len + 12);
+            let temp_chunk = Chunk::try_from(left)?;
+            chunk_vec.push(temp_chunk);
+            match right.len() {
+                0 => break,
+                x if x < 12 && x > 0 => return Err(PngError::ChunkError),
+                _ => {
+                    chunks = right
+                }
+            }
         }
-
-        Ok(Self::from_chunks(chunks))
+        Ok(Png::from_chunks(chunk_vec))
     }
 }
 
-impl fmt::Display for Png {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "signature:{:?}, chunks:{:?}", self.signature, self.chunks)
+impl Display for Png {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "header:{:?}, chunks:{:?}", self.signature, self.chunks)
     }
 }
 
@@ -177,7 +145,7 @@ mod tests {
         Png::from_chunks(chunks)
     }
 
-    fn chunk_from_strings(chunk_type: &str, data: &str) -> Result<Chunk, ChunkTypeError> {
+    fn chunk_from_strings(chunk_type: &str, data: &str) -> Result<Chunk, PngError> {
         use std::str::FromStr;
 
         let chunk_type = ChunkType::from_str(chunk_type)?;
@@ -287,37 +255,37 @@ mod tests {
         assert!(chunk.is_none());
     }
 
-    // #[test]
-    // fn test_png_from_image_file() {
-    //     let png = Png::try_from(&PNG_FILE[..]);
-    //     assert!(png.is_ok());
-    // }
-    //
-    // #[test]
-    // fn test_as_bytes() {
-    //     let png = Png::try_from(&PNG_FILE[..]).unwrap();
-    //     let actual = png.as_bytes();
-    //     let expected: Vec<u8> = PNG_FILE.to_vec();
-    //     assert_eq!(actual, expected);
-    // }
+    #[test]
+    fn test_png_from_image_file() {
+        let png = Png::try_from(&PNG_FILE[..]);
+        assert!(png.is_ok());
+    }
 
-    // #[test]
-    // fn test_png_trait_impls() {
-    //     let chunk_bytes: Vec<u8> = testing_chunks()
-    //         .into_iter()
-    //         .flat_map(|chunk| chunk.as_bytes())
-    //         .collect();
-    //
-    //     let bytes: Vec<u8> = Png::STANDARD_HEADER
-    //         .iter()
-    //         .chain(chunk_bytes.iter())
-    //         .copied()
-    //         .collect();
-    //
-    //     let png: Png = TryFrom::try_from(bytes.as_ref()).unwrap();
-    //
-    //     let _png_string = format!("{}", png);
-    // }
+    #[test]
+    fn test_as_bytes() {
+        let png = Png::try_from(&PNG_FILE[..]).unwrap();
+        let actual = png.as_bytes();
+        let expected: Vec<u8> = PNG_FILE.to_vec();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn test_png_trait_impls() {
+        let chunk_bytes: Vec<u8> = testing_chunks()
+            .into_iter()
+            .flat_map(|chunk| chunk.as_bytes())
+            .collect();
+
+        let bytes: Vec<u8> = Png::STANDARD_HEADER
+            .iter()
+            .chain(chunk_bytes.iter())
+            .copied()
+            .collect();
+
+        let png: Png = TryFrom::try_from(bytes.as_ref()).unwrap();
+
+        let _png_string = format!("{}", png);
+    }
 
     // This is the raw bytes for a shrunken version of the `dice.png` image on Wikipedia
     const PNG_FILE: [u8; 4803] = [

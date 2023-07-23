@@ -1,78 +1,102 @@
-use std::convert::TryFrom;
-use std::fmt;
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-#[derive(PartialEq, Debug, Clone)]
-pub struct ChunkType([u8; 4]);
+use anyhow::Result;
 
-#[derive(Debug, thiserror::Error, PartialEq, Eq)]
-pub enum ChunkTypeError {
-    #[error("expected a length of 4 bytes but got {0} instead")]
-    InvalidLength(usize),
+use crate::png_error::PngError;
 
-    #[error("invalid byte in byte sequence {0}")]
-    InvalidByte(u8)
-}
+/**
+fn bytes(&self) -> [u8; 4]
+fn is_valid(&self) -> bool
+fn is_critical(&self) -> bool
+fn is_public(&self) -> bool
+fn is_reserved_bit_valid(&self) -> bool
+fn is_safe_to_copy(&self) -> bool
+ */
+#[derive(Debug)]
+pub struct ChunkType(u8, u8, u8, u8);
 
 impl ChunkType {
-    pub fn bytes(&self) -> [u8; 4] {
-        return self.0;
+    fn bytes(&self) -> [u8; 4] {
+        [self.0, self.1, self.2, self.3]
     }
 
+    // bit 5 of first byte
+    // 0-uppercase-critical
+    // 1-lowercase-ancillary
     fn is_critical(&self) -> bool {
-        return (self.0[0] >> 5) & 1 == 0;
+        self.0.is_ascii_uppercase()
     }
 
+    // bit 5 of second byte
+    // 0-uppercase-public
+    // 1-lowercase-private
     fn is_public(&self) -> bool {
-        return (self.0[1] >> 5) & 1 == 0;
+        self.1.is_ascii_uppercase()
     }
 
+    // bit 5 of third byte
+    // must be 0-uppercase
     fn is_reserved_bit_valid(&self) -> bool {
-        return (self.0[2] >> 5) & 1 == 0;
+        self.2.is_ascii_uppercase()
     }
 
+    // bit 5 of second byte
+    // 0-uppercase-unsafe to copy
+    // 1-lowercase-safe to copy
     fn is_safe_to_copy(&self) -> bool {
-        return (self.0[3] >> 5) & 1 != 0;
+        self.3.is_ascii_lowercase()
     }
-
     fn is_valid(&self) -> bool {
-        return self.is_reserved_bit_valid();
+        self.is_reserved_bit_valid()
     }
 
-    fn is_valid_byte(byte: u8) -> bool {
-        return byte.is_ascii_alphabetic();
+    fn is_err(&self) -> bool {
+        !(self.0.is_ascii_alphabetic()
+            && self.1.is_ascii_alphabetic()
+            && self.2.is_ascii_alphabetic()
+            && self.3.is_ascii_alphabetic())
     }
 }
 
 impl TryFrom<[u8; 4]> for ChunkType {
-    type Error = ChunkTypeError;
-    
-    fn try_from(arr: [u8; 4]) -> Result<Self, Self::Error> {
-        match arr.iter().find(|b| !ChunkType::is_valid_byte(**b)) {
-            Some(b) => Err(ChunkTypeError::InvalidByte(*b)),
-            _ => Ok(Self(arr)),
+    type Error = PngError;
+
+    fn try_from(value: [u8; 4]) -> Result<Self, PngError> {
+        for val in value {
+            match val.is_ascii_alphabetic() {
+                true => {}
+                _ => return Err(PngError::ChunkTypeError)
+            }
         }
+        Ok(ChunkType(value[0], value[1], value[2], value[3]))
     }
 }
 
 impl FromStr for ChunkType {
-    type Err = ChunkTypeError;
-    
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes: [u8; 4] = s.as_bytes().try_into().map_err(|_| ChunkTypeError::InvalidLength(s.len()))?;
-        return ChunkType::try_from(bytes);
-    }
+    type Err = PngError;
 
-}
-
-impl fmt::Display for ChunkType {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-
-        write!(f, "{}", std::str::from_utf8(&self.0).unwrap_or_default())
+    fn from_str(s: &str) -> std::result::Result<Self, PngError> {
+        let value = s.as_bytes();
+        ChunkType::try_from(<[u8; 4]>::try_from(value).unwrap())
     }
 }
 
-#[cfg(test)]
+impl PartialEq for ChunkType {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+            && self.1 == other.1
+            && self.2 == other.2
+            && self.3 == other.3
+    }
+}
+
+impl Display for ChunkType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let s = String::from_utf8(self.bytes().to_vec()).unwrap();
+        write!(f, "{}", s)
+    }
+}#[cfg(test)]
 mod tests {
     use super::*;
     use std::convert::TryFrom;
