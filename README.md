@@ -18,6 +18,7 @@
 * [Getting Started](#getting-started)
   * [Prerequisites](#prerequisites)
   * [Installation](#installation)
+* [Demonstration](#demonstration)
 * [Contributing](#contributing)
 * [License](#license)
 * [Authors](#authors)
@@ -61,6 +62,9 @@ cargo build
 ```sh
 cargo run
 ```
+
+## Demonstration
+Check out [this youtube playlist](https://www.youtube.com/playlist?list=PLnvYMKNt9C8hpZapHWdw3pMJX8yzkjmQl) where you can watch the whole build process
 
 ## Contributing
 
